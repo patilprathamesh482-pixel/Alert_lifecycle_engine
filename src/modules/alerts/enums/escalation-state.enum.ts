@@ -1,5 +1,5 @@
 export enum EscalationState {
-  WARNING = 'WARNING',
-  ATTENTION = 'ATTENTION',
-  CRITICAL = 'CRITICAL',
+  WARNING = "WARNING",
+  ATTENTION = "ATTENTION",
+  CRITICAL = "CRITICAL",
 }

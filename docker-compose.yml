@@ -1,0 +1,23 @@
+services:
+  alert-lifecycle-engine:
+    build:
+      context: .
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      APP_PORT: 3000
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      BODY_LIMIT: ${BODY_LIMIT:-100kb}
+      DATA_DIR: /app/data
+      MAX_ACTIVITY_LOGS: ${MAX_ACTIVITY_LOGS:-10000}
+      ESCALATION_INTERVAL_MS: ${ESCALATION_INTERVAL_MS:-10000}
+      ATTENTION_THRESHOLD_SECONDS: ${ATTENTION_THRESHOLD_SECONDS:-30}
+      CRITICAL_THRESHOLD_SECONDS: ${CRITICAL_THRESHOLD_SECONDS:-60}
+      THROTTLE_TTL_MS: ${THROTTLE_TTL_MS:-60000}
+      THROTTLE_LIMIT: ${THROTTLE_LIMIT:-120}
+    volumes:
+      - alert-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  alert-data:

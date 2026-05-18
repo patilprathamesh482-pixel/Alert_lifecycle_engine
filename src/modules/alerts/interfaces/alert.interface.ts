@@ -1,5 +1,5 @@
-import { AlertState } from '../enums/alert-state.enum';
-import { EscalationState } from '../enums/escalation-state.enum';
+import { AlertState } from "../enums/alert-state.enum";
+import { EscalationState } from "../enums/escalation-state.enum";
 
 export interface Alert {
   alertId: string;

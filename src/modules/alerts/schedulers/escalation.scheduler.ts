@@ -1,148 +1,122 @@
-import { Injectable } from '@nestjs/common';
-
 import {
-  Cron,
-  CronExpression,
-} from '@nestjs/schedule';
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { v4 as uuid } from "uuid";
 
-import { v4 as uuid } from 'uuid';
-
-import { AlertsRepository } from '../repositories/alerts.repository';
-import { ActivityLogRepository } from '../repositories/activity-log.repository';
-
-import { AlertState } from '../enums/alert-state.enum';
-import { EscalationState } from '../enums/escalation-state.enum';
-import { ActivityAction } from '../enums/activity-action.enum';
+import { ActivityAction } from "../enums/activity-action.enum";
+import { AlertState } from "../enums/alert-state.enum";
+import { EscalationState } from "../enums/escalation-state.enum";
+import { ActivityLogRepository } from "../repositories/activity-log.repository";
+import { AlertsRepository } from "../repositories/alerts.repository";
 
 @Injectable()
-export class EscalationScheduler {
+export class EscalationScheduler implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(EscalationScheduler.name);
+
+  private interval?: NodeJS.Timeout;
+
   constructor(
     private readonly alertsRepository: AlertsRepository,
-
     private readonly activityLogRepository: ActivityLogRepository,
+    private readonly configService: ConfigService,
   ) {}
 
-  /**
-   * Runs every 10 seconds
-   */
-  @Cron(CronExpression.EVERY_10_SECONDS)
-  handleEscalation(): void {
-    const alerts =
-      this.alertsRepository.getAllAlerts();
+  onModuleInit(): void {
+    const intervalMs = this.configService.get<number>(
+      "escalation.intervalMs",
+      10000,
+    );
+
+    this.interval = setInterval(() => {
+      this.handleEscalation().catch((error: unknown) => {
+        this.logger.error(
+          "Escalation scheduler failed",
+          error instanceof Error ? error.stack : String(error),
+        );
+      });
+    }, intervalMs);
+  }
+
+  onModuleDestroy(): void {
+    if (this.interval) {
+      clearInterval(this.interval);
+    }
+  }
+
+  async handleEscalation(now = Date.now()): Promise<void> {
+    const alerts = this.alertsRepository.getAllAlerts();
 
     for (const alert of alerts) {
-      /**
-       * Ignore resolved alerts
-       */
-      if (
-        alert.state ===
-        AlertState.RESOLVED
-      ) {
+      if (alert.state === AlertState.RESOLVED) {
         continue;
       }
 
-      const now = Date.now();
+      const elapsedSeconds = Math.floor((now - alert.createdAt) / 1000);
 
-      /**
-       * Elapsed seconds
-       */
-      const elapsedSeconds = Math.floor(
-        (now - alert.createdAt) / 1000,
-      );
+      const escalation = this.determineEscalation(elapsedSeconds);
 
-      /**
-       * Determine escalation
-       */
-      const escalation =
-        this.determineEscalation(
-          elapsedSeconds,
-        );
-
-      /**
-       * Already at correct level
-       */
-      if (
-        escalation.level ===
-        alert.escalationLevel
-      ) {
+      if (escalation.level === alert.escalationLevel) {
         continue;
       }
 
-      /**
-       * Apply escalation
-       */
-      alert.escalationLevel =
-        escalation.level;
-
-      alert.escalationState =
-        escalation.state;
-
+      alert.escalationLevel = escalation.level;
+      alert.escalationState = escalation.state;
       alert.updatedAt = now;
 
-      this.alertsRepository.save(alert);
+      await this.alertsRepository.save(alert);
 
-      /**
-       * Activity log
-       */
-      this.activityLogRepository.addLog({
+      await this.activityLogRepository.addLog({
         id: uuid(),
-
         alertId: alert.alertId,
-
-        action:
-          ActivityAction.ALERT_ESCALATED,
-
+        tenantId: alert.tenantId,
+        deviceId: alert.deviceId,
+        action: ActivityAction.ALERT_ESCALATED,
         timestamp: now,
-
         metadata: {
-          escalationLevel:
-            escalation.level,
-
-          escalationState:
-            escalation.state,
+          tenantId: alert.tenantId,
+          deviceId: alert.deviceId,
+          escalationLevel: escalation.level,
+          escalationState: escalation.state,
         },
       });
     }
   }
 
-  /**
-   * Determine escalation level
-   */
-  private determineEscalation(
-    elapsedSeconds: number,
-  ): {
+  private determineEscalation(elapsedSeconds: number): {
     level: number;
     state: EscalationState;
   } {
-    /**
-     * 60+ seconds
-     */
-    if (elapsedSeconds >= 60) {
+    const attentionThreshold = this.configService.get<number>(
+      "escalation.attentionThresholdSeconds",
+      30,
+    );
+
+    const criticalThreshold = this.configService.get<number>(
+      "escalation.criticalThresholdSeconds",
+      60,
+    );
+
+    if (elapsedSeconds >= criticalThreshold) {
       return {
         level: 3,
-        state:
-          EscalationState.CRITICAL,
+        state: EscalationState.CRITICAL,
       };
     }
 
-    /**
-     * 30+ seconds
-     */
-    if (elapsedSeconds >= 30) {
+    if (elapsedSeconds >= attentionThreshold) {
       return {
         level: 2,
-        state:
-          EscalationState.ATTENTION,
+        state: EscalationState.ATTENTION,
       };
     }
 
-    /**
-     * Default
-     */
     return {
       level: 1,
-      state:
-        EscalationState.WARNING,
+      state: EscalationState.WARNING,
     };
   }
 }

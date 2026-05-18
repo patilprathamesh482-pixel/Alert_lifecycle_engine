@@ -1,9 +1,13 @@
-import { ActivityAction } from '../enums/activity-action.enum';
+import { ActivityAction } from "../enums/activity-action.enum";
 
 export interface ActivityLog {
   id: string;
 
   alertId: string;
+
+  tenantId?: string;
+
+  deviceId?: string;
 
   action: ActivityAction;
 

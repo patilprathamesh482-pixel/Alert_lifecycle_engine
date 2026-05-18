@@ -1,16 +1,21 @@
-import { Module } from '@nestjs/common';
+import { Module } from "@nestjs/common";
 
-import { AlertsController } from './controllers/alerts.controller';
+import { CommonModule } from "../../common/common.module";
 
-import { AlertsService } from './services/alerts.service';
+import { AlertsController } from "./controllers/alerts.controller";
 
-import { EscalationScheduler } from './schedulers/escalation.scheduler';
+import { AlertsService } from "./services/alerts.service";
 
-import { AlertsRepository } from './repositories/alerts.repository';
+import { EscalationScheduler } from "./schedulers/escalation.scheduler";
 
-import { ActivityLogRepository } from './repositories/activity-log.repository';
+import { AlertsRepository } from "./repositories/alerts.repository";
+
+import { ActivityLogRepository } from "./repositories/activity-log.repository";
+import { ProcessedEventsRepository } from "./repositories/processed-events.repository";
 
 @Module({
+  imports: [CommonModule],
+
   controllers: [AlertsController],
 
   providers: [
@@ -18,6 +23,7 @@ import { ActivityLogRepository } from './repositories/activity-log.repository';
     EscalationScheduler,
     AlertsRepository,
     ActivityLogRepository,
+    ProcessedEventsRepository,
   ],
 
   exports: [AlertsService],

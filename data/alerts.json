@@ -1,0 +1,46 @@
+[
+  {
+    "alertId": "7e02cc0c-9420-4a0c-b289-b23a2a8aa0df",
+    "tenantId": "tenant-1",
+    "deviceId": "router-01",
+    "state": "ACTIVE",
+    "escalationLevel": 3,
+    "escalationState": "CRITICAL",
+    "createdAt": 1747558740000,
+    "updatedAt": 1779094992859,
+    "lastProcessedEventTimestamp": 1747558740000
+  },
+  {
+    "alertId": "bb7448de-5a6f-4ba1-95d9-87aca415ac6a",
+    "tenantId": "tenant-1",
+    "deviceId": "router-02",
+    "state": "ACTIVE",
+    "escalationLevel": 3,
+    "escalationState": "CRITICAL",
+    "createdAt": 1779095088,
+    "updatedAt": 1779095122966,
+    "lastProcessedEventTimestamp": 1779095088
+  },
+  {
+    "alertId": "26e9163c-4696-4e1c-9e51-36f25f18af74",
+    "tenantId": "tenant-1",
+    "deviceId": "router-03",
+    "state": "ACTIVE",
+    "escalationLevel": 3,
+    "escalationState": "CRITICAL",
+    "createdAt": 1779095131,
+    "updatedAt": 1779095193018,
+    "lastProcessedEventTimestamp": 1779095131
+  },
+  {
+    "alertId": "7bd5b623-681c-4b9b-ade7-6e325d0972d4",
+    "tenantId": "tenant-1",
+    "deviceId": "router-04",
+    "state": "ACTIVE",
+    "escalationLevel": 3,
+    "escalationState": "CRITICAL",
+    "createdAt": 1779095213018,
+    "updatedAt": 1779095273060,
+    "lastProcessedEventTimestamp": 1779095213018
+  }
+]

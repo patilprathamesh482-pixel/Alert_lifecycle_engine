@@ -1,297 +1,244 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
+import { v4 as uuid } from "uuid";
 
-import { v4 as uuid } from 'uuid';
-
-import { AlertsRepository } from '../repositories/alerts.repository';
-import { ActivityLogRepository } from '../repositories/activity-log.repository';
-
-import { DeviceEvent } from '../interfaces/device-event.interface';
-import { Alert } from '../interfaces/alert.interface';
-
-import { EventType } from '../enums/event-type.enum';
-import { AlertState } from '../enums/alert-state.enum';
-import { EscalationState } from '../enums/escalation-state.enum';
-import { ActivityAction } from '../enums/activity-action.enum';
+import { ActivityAction } from "../enums/activity-action.enum";
+import { AlertState } from "../enums/alert-state.enum";
+import { EscalationState } from "../enums/escalation-state.enum";
+import { EventType } from "../enums/event-type.enum";
+import { ActivityLog } from "../interfaces/activity-log.interface";
+import { Alert } from "../interfaces/alert.interface";
+import { DeviceEvent } from "../interfaces/device-event.interface";
+import { ActivityLogRepository } from "../repositories/activity-log.repository";
+import { AlertsRepository } from "../repositories/alerts.repository";
+import { ProcessedEventsRepository } from "../repositories/processed-events.repository";
 
 @Injectable()
 export class AlertsService {
+  private readonly logger = new Logger(AlertsService.name);
+
   constructor(
     private readonly alertsRepository: AlertsRepository,
-
     private readonly activityLogRepository: ActivityLogRepository,
+    private readonly processedEventsRepository: ProcessedEventsRepository,
   ) {}
 
-  /**
-   * Used for event deduplication
-   */
-  private readonly processedEventIds =
-    new Set<string>();
-
-  processEvent(event: DeviceEvent): void {
-    /**
-     * STEP 1
-     * Deduplicate events
-     */
+  async processEvent(event: DeviceEvent): Promise<void> {
     if (
-      this.processedEventIds.has(
+      this.processedEventsRepository.has(
+        event.tenantId,
+        event.deviceId,
         event.eventId,
       )
     ) {
       return;
     }
 
-    this.processedEventIds.add(
-      event.eventId,
+    const existingAlert = this.alertsRepository.findByDevice(
+      event.tenantId,
+      event.deviceId,
     );
 
-    /**
-     * STEP 2
-     * Log incoming event
-     */
-    this.addActivityLog({
-      alertId: 'N/A',
-      action: ActivityAction.EVENT_RECEIVED,
-      metadata: {
-        event,
-      },
-    });
-
-    /**
-     * STEP 3
-     * Get existing alert
-     */
-    const existingAlert =
-      this.alertsRepository.findByDevice(
-        event.tenantId,
-        event.deviceId,
-      );
-
-    /**
-     * STEP 4
-     * Handle DEVICE_DOWN
-     */
-    if (
-      event.eventType ===
-      EventType.DEVICE_DOWN
-    ) {
-      this.handleDeviceDown(
-        event,
-        existingAlert,
-      );
-
+    if (this.isOutOfOrder(event, existingAlert)) {
+      this.logger.warn(`Ignored out-of-order event ${event.eventId}`);
+      await this.markEventProcessed(event);
       return;
     }
 
-    /**
-     * STEP 5
-     * Handle DEVICE_UP
-     */
-    if (
-      event.eventType ===
-      EventType.DEVICE_UP
-    ) {
-      this.handleDeviceUp(
-        event,
-        existingAlert,
-      );
+    await this.addActivityLog({
+      alertId: existingAlert?.alertId ?? "N/A",
+      tenantId: event.tenantId,
+      deviceId: event.deviceId,
+      action: ActivityAction.EVENT_RECEIVED,
+      timestamp: event.timestamp,
+      metadata: { event },
+    });
+
+    if (event.eventType === EventType.DEVICE_DOWN) {
+      await this.handleDeviceDown(event, existingAlert);
+      await this.markEventProcessed(event);
+      return;
     }
+
+    await this.handleDeviceUp(event, existingAlert);
+    await this.markEventProcessed(event);
   }
 
-  /**
-   * Handle DEVICE_DOWN event
-   */
-  private handleDeviceDown(
+  getAlerts(): Alert[] {
+    return this.alertsRepository.getAllAlerts();
+  }
+
+  getLogs(): ActivityLog[] {
+    return this.activityLogRepository.getLogs();
+  }
+
+  async acknowledgeAlert(
+    alertId: string,
+    acknowledgedAt: number,
+    acknowledgedBy?: string,
+  ): Promise<Alert> {
+    const alert = this.alertsRepository.findByAlertId(alertId);
+
+    if (!alert) {
+      throw new NotFoundException("Alert not found");
+    }
+
+    if (alert.state === AlertState.RESOLVED) {
+      throw new BadRequestException("Resolved alerts cannot be acknowledged");
+    }
+
+    if (alert.state === AlertState.ACKNOWLEDGED) {
+      return alert;
+    }
+
+    alert.state = AlertState.ACKNOWLEDGED;
+    alert.updatedAt = acknowledgedAt;
+
+    await this.alertsRepository.save(alert);
+
+    await this.addActivityLog({
+      alertId: alert.alertId,
+      tenantId: alert.tenantId,
+      deviceId: alert.deviceId,
+      action: ActivityAction.ALERT_ACKNOWLEDGED,
+      timestamp: acknowledgedAt,
+      metadata: {
+        tenantId: alert.tenantId,
+        deviceId: alert.deviceId,
+        acknowledgedAt,
+        acknowledgedBy,
+      },
+    });
+
+    return alert;
+  }
+
+  private async handleDeviceDown(
     event: DeviceEvent,
     existingAlert?: Alert,
-  ): void {
-    /**
-     * CASE 1
-     * No existing alert
-     * Create new alert
-     */
+  ): Promise<void> {
     if (!existingAlert) {
       const alert: Alert = {
         alertId: uuid(),
-
         tenantId: event.tenantId,
         deviceId: event.deviceId,
-
         state: AlertState.ACTIVE,
-
         escalationLevel: 1,
-
-        escalationState:
-          EscalationState.WARNING,
-
+        escalationState: EscalationState.WARNING,
         createdAt: event.timestamp,
-
         updatedAt: event.timestamp,
-
-        lastProcessedEventTimestamp:
-          event.timestamp,
+        lastProcessedEventTimestamp: event.timestamp,
       };
 
-      this.alertsRepository.save(alert);
+      await this.alertsRepository.save(alert);
 
-      this.addActivityLog({
+      await this.addActivityLog({
         alertId: alert.alertId,
+        tenantId: alert.tenantId,
+        deviceId: alert.deviceId,
         action: ActivityAction.ALERT_CREATED,
-        metadata: {
-          alert,
-        },
+        timestamp: event.timestamp,
+        metadata: { alert },
       });
 
       return;
     }
 
-    /**
-     * CASE 2
-     * Ignore older events
-     * (out-of-order protection)
-     */
-    if (
-      event.timestamp <
-      existingAlert.lastProcessedEventTimestamp
-    ) {
-      return;
+    existingAlert.lastProcessedEventTimestamp = event.timestamp;
+    existingAlert.updatedAt = event.timestamp;
+
+    if (existingAlert.state === AlertState.RESOLVED) {
+      existingAlert.state = AlertState.ACTIVE;
+      existingAlert.createdAt = event.timestamp;
+      existingAlert.escalationLevel = 1;
+      existingAlert.escalationState = EscalationState.WARNING;
+
+      await this.addActivityLog({
+        alertId: existingAlert.alertId,
+        tenantId: existingAlert.tenantId,
+        deviceId: existingAlert.deviceId,
+        action: ActivityAction.ALERT_CREATED,
+        timestamp: event.timestamp,
+        metadata: {
+          alert: existingAlert,
+          reopened: true,
+        },
+      });
     }
 
-    /**
-     * CASE 3
-     * Alert already active
-     * Ignore duplicate DOWN
-     */
-    if (
-      existingAlert.state !==
-      AlertState.RESOLVED
-    ) {
-      existingAlert.lastProcessedEventTimestamp =
-        event.timestamp;
-
-      existingAlert.updatedAt =
-        event.timestamp;
-
-      this.alertsRepository.save(
-        existingAlert,
-      );
-
-      return;
-    }
-
-    /**
-     * CASE 4
-     * Re-open resolved alert
-     */
-    existingAlert.state =
-      AlertState.ACTIVE;
-
-    existingAlert.updatedAt =
-      event.timestamp;
-
-    existingAlert.lastProcessedEventTimestamp =
-      event.timestamp;
-
-    existingAlert.escalationLevel = 1;
-
-    existingAlert.escalationState =
-      EscalationState.WARNING;
-
-    this.alertsRepository.save(
-      existingAlert,
-    );
+    await this.alertsRepository.save(existingAlert);
   }
 
-  /**
-   * Handle DEVICE_UP event
-   */
-  private handleDeviceUp(
+  private async handleDeviceUp(
     event: DeviceEvent,
     existingAlert?: Alert,
-  ): void {
-    /**
-     * No alert exists
-     */
+  ): Promise<void> {
     if (!existingAlert) {
       return;
     }
 
-    /**
-     * Ignore older events
-     */
-    if (
-      event.timestamp <
-      existingAlert.lastProcessedEventTimestamp
-    ) {
+    if (existingAlert.state === AlertState.RESOLVED) {
+      existingAlert.lastProcessedEventTimestamp = event.timestamp;
+      existingAlert.updatedAt = event.timestamp;
+
+      await this.alertsRepository.save(existingAlert);
       return;
     }
 
-    /**
-     * Already resolved
-     */
-    if (
-      existingAlert.state ===
-      AlertState.RESOLVED
-    ) {
-      return;
-    }
+    existingAlert.state = AlertState.RESOLVED;
+    existingAlert.updatedAt = event.timestamp;
+    existingAlert.lastProcessedEventTimestamp = event.timestamp;
 
-    /**
-     * Resolve alert
-     */
-    existingAlert.state =
-      AlertState.RESOLVED;
+    await this.alertsRepository.save(existingAlert);
 
-    existingAlert.updatedAt =
-      event.timestamp;
-
-    existingAlert.lastProcessedEventTimestamp =
-      event.timestamp;
-
-    this.alertsRepository.save(
-      existingAlert,
-    );
-
-    this.addActivityLog({
+    await this.addActivityLog({
       alertId: existingAlert.alertId,
+      tenantId: existingAlert.tenantId,
+      deviceId: existingAlert.deviceId,
       action: ActivityAction.ALERT_RESOLVED,
+      timestamp: event.timestamp,
       metadata: {
+        tenantId: event.tenantId,
         deviceId: event.deviceId,
       },
     });
   }
 
-  /**
-   * Create activity log
-   */
-  private addActivityLog(params: {
+  private isOutOfOrder(event: DeviceEvent, existingAlert?: Alert): boolean {
+    return Boolean(
+      existingAlert &&
+      event.timestamp < existingAlert.lastProcessedEventTimestamp,
+    );
+  }
+
+  private async addActivityLog(params: {
     alertId: string;
+    tenantId?: string;
+    deviceId?: string;
     action: ActivityAction;
+    timestamp: number;
     metadata?: Record<string, unknown>;
-  }): void {
-    this.activityLogRepository.addLog({
+  }): Promise<void> {
+    await this.activityLogRepository.addLog({
       id: uuid(),
-
       alertId: params.alertId,
-
+      tenantId: params.tenantId,
+      deviceId: params.deviceId,
       action: params.action,
-
-      timestamp: Date.now(),
-
+      timestamp: params.timestamp,
       metadata: params.metadata,
     });
   }
 
-  /**
-   * Fetch all alerts
-   */
-  getAlerts(): Alert[] {
-    return this.alertsRepository.getAllAlerts();
-  }
-
-  /**
-   * Fetch logs
-   */
-  getLogs() {
-    return this.activityLogRepository.getLogs();
+  private async markEventProcessed(event: DeviceEvent): Promise<void> {
+    await this.processedEventsRepository.add(
+      event.tenantId,
+      event.deviceId,
+      event.eventId,
+    );
   }
 }

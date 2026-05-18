@@ -1,4 +1,4 @@
-import { EventType } from '../enums/event-type.enum';
+import { EventType } from "../enums/event-type.enum";
 
 export interface DeviceEvent {
   tenantId: string;

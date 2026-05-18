@@ -1,36 +1,59 @@
-import { Injectable } from '@nestjs/common';
-import { Alert } from '../interfaces/alert.interface';
+import { Injectable, OnModuleInit } from "@nestjs/common";
+
+import { PersistenceService } from "../../../common/services/persistence.service";
+import { Alert } from "../interfaces/alert.interface";
 
 @Injectable()
-export class AlertsRepository {
+export class AlertsRepository implements OnModuleInit {
   private readonly alerts = new Map<string, Alert>();
 
-  generateKey(tenantId: string, deviceId: string): string {
-    return `${tenantId}:${deviceId}`;
-  }
+  private readonly storagePath = "alerts.json";
 
-  save(alert: Alert): void {
-    const key = this.generateKey(
-      alert.tenantId,
-      alert.deviceId,
+  constructor(private readonly persistenceService: PersistenceService) {}
+
+  async onModuleInit(): Promise<void> {
+    const alerts = await this.persistenceService.loadFromFile(
+      this.storagePath,
+      [] as Alert[],
     );
 
-    this.alerts.set(key, alert);
+    for (const alert of alerts) {
+      this.alerts.set(this.generateKey(alert.tenantId, alert.deviceId), alert);
+    }
   }
 
-  findByDevice(
-    tenantId: string,
-    deviceId: string,
-  ): Alert | undefined {
-    const key = this.generateKey(
-      tenantId,
-      deviceId,
-    );
+  async save(alert: Alert): Promise<void> {
+    this.alerts.set(this.generateKey(alert.tenantId, alert.deviceId), alert);
 
-    return this.alerts.get(key);
+    await this.persist();
+  }
+
+  findByDevice(tenantId: string, deviceId: string): Alert | undefined {
+    return this.alerts.get(this.generateKey(tenantId, deviceId));
+  }
+
+  findByAlertId(alertId: string): Alert | undefined {
+    for (const alert of this.alerts.values()) {
+      if (alert.alertId === alertId) {
+        return alert;
+      }
+    }
+
+    return undefined;
   }
 
   getAllAlerts(): Alert[] {
     return Array.from(this.alerts.values());
+  }
+
+  private generateKey(tenantId: string, deviceId: string): string {
+    return `${tenantId}:${deviceId}`;
+  }
+
+  private async persist(): Promise<void> {
+    await this.persistenceService.saveToFile(
+      this.storagePath,
+      this.getAllAlerts(),
+    );
   }
 }
